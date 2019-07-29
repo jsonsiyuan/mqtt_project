@@ -1,17 +1,74 @@
+/*******************************************************************************
+ * Copyright (c) 2012, 2016 IBM Corp.
+ *
+ * All rights reserved. This program and the accompanying materials
+ * are made available under the terms of the Eclipse Public License v1.0
+ * and Eclipse Distribution License v1.0 which accompany this distribution. 
+ *
+ * The Eclipse Public License is available at 
+ *   http://www.eclipse.org/legal/epl-v10.html
+ * and the Eclipse Distribution License is available at 
+ *   http://www.eclipse.org/org/documents/edl-v10.php.
+ *
+ * Contributors:
+ *    Ian Craggs - initial contribution
+ *    Ian Craggs - change delimiter option from char to string
+ *    Al Stockdill-Mander - Version using the embedded C client
+ *    Ian Craggs - update MQTTClient function names
+ *******************************************************************************/
+
+/*
+ 
+ stdout subscriber
+ 
+ compulsory parameters:
+ 
+  topic to subscribe to
+ 
+ defaulted parameters:
+ 
+	--host localhost
+	--port 1883
+	--qos 2
+	--delimiter \n
+	--clientid stdout_subscriber
+	
+	--userid none
+	--password none
+
+ for example:
+
+    stdoutsub topic/of/interest --host iot.eclipse.org
+
+*/
+#include <stdio.h>
+#include <memory.h>
+#include "MQTTClient.h"
 
 #include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
-
-#include "MQTTPacket.h"
-#include "transport.h"
-
-/* This is in order to get an asynchronous signal to stop the sample,
-as the code loops waiting for msgs on the subscribed topic.
-Your actual code will depend on your hw and approach*/
 #include <signal.h>
 
-int toStop = 0;
+#include <sys/time.h>
+
+
+volatile int toStop = 0;
+
+
+void usage()
+{
+	printf("MQTT stdout subscriber\n");
+	printf("Usage: stdoutsub topicname <options>, where options are:\n");
+	printf("  --host <hostname> (default is localhost)\n");
+	printf("  --port <port> (default is 1883)\n");
+	printf("  --qos <qos> (default is 2)\n");
+	printf("  --delimiter <delim> (default is \\n)\n");
+	printf("  --clientid <clientid> (default is hostname+timestamp)\n");
+	printf("  --username none\n");
+	printf("  --password none\n");
+	printf("  --showtopics <on or off> (default is on if the topic has a wildcard, else off)\n");
+	exit(-1);
+}
+
 
 void cfinish(int sig)
 {
@@ -19,120 +76,179 @@ void cfinish(int sig)
 	toStop = 1;
 }
 
-void stop_init(void)
+
+struct opts_struct
 {
+	char* clientid;
+	int nodelimiter;
+	char* delimiter;
+	enum QoS qos;
+	char* username;
+	char* password;
+	char* host;
+	int port;
+	int showtopics;
+} opts =
+{
+	(char*)"stdout-subscriber", 0, (char*)"\n", QOS2, NULL, NULL, (char*)"localhost", 1883, 0
+};
+
+
+void getopts(int argc, char** argv)
+{
+	int count = 2;
+	
+	while (count < argc)
+	{
+		if (strcmp(argv[count], "--qos") == 0)
+		{
+			if (++count < argc)
+			{
+				if (strcmp(argv[count], "0") == 0)
+					opts.qos = QOS0;
+				else if (strcmp(argv[count], "1") == 0)
+					opts.qos = QOS1;
+				else if (strcmp(argv[count], "2") == 0)
+					opts.qos = QOS2;
+				else
+					usage();
+			}
+			else
+				usage();
+		}
+		else if (strcmp(argv[count], "--host") == 0)
+		{
+			if (++count < argc)
+				opts.host = argv[count];
+			else
+				usage();
+		}
+		else if (strcmp(argv[count], "--port") == 0)
+		{
+			if (++count < argc)
+				opts.port = atoi(argv[count]);
+			else
+				usage();
+		}
+		else if (strcmp(argv[count], "--clientid") == 0)
+		{
+			if (++count < argc)
+				opts.clientid = argv[count];
+			else
+				usage();
+		}
+		else if (strcmp(argv[count], "--username") == 0)
+		{
+			if (++count < argc)
+				opts.username = argv[count];
+			else
+				usage();
+		}
+		else if (strcmp(argv[count], "--password") == 0)
+		{
+			if (++count < argc)
+				opts.password = argv[count];
+			else
+				usage();
+		}
+		else if (strcmp(argv[count], "--delimiter") == 0)
+		{
+			if (++count < argc)
+				opts.delimiter = argv[count];
+			else
+				opts.nodelimiter = 1;
+		}
+		else if (strcmp(argv[count], "--showtopics") == 0)
+		{
+			if (++count < argc)
+			{
+				if (strcmp(argv[count], "on") == 0)
+					opts.showtopics = 1;
+				else if (strcmp(argv[count], "off") == 0)
+					opts.showtopics = 0;
+				else
+					usage();
+			}
+			else
+				usage();
+		}
+		count++;
+	}
+	
+}
+
+
+void messageArrived(MessageData* md)
+{
+	MQTTMessage* message = md->message;
+
+	if (opts.showtopics)
+		printf("%.*s\t", md->topicName->lenstring.len, md->topicName->lenstring.data);
+	if (opts.nodelimiter)
+		printf("%.*s", (int)message->payloadlen, (char*)message->payload);
+	else
+		printf("%.*s%s", (int)message->payloadlen, (char*)message->payload, opts.delimiter);
+	//fflush(stdout);
+}
+
+
+int main(int argc, char** argv)
+{
+	int rc = 0;
+	unsigned char buf[100];
+	unsigned char readbuf[100];
+	
+	if (argc < 2)
+		usage();
+	
+	char* topic = argv[1];
+
+	if (strchr(topic, '#') || strchr(topic, '+'))
+		opts.showtopics = 1;
+	if (opts.showtopics)
+		printf("topic is %s\n", topic);
+
+	getopts(argc, argv);	
+
+	Network n;
+	MQTTClient c;
+
 	signal(SIGINT, cfinish);
 	signal(SIGTERM, cfinish);
-}
-/* */
 
-int main(int argc, char *argv[])
-{
-	MQTTPacket_connectData data = MQTTPacket_connectData_initializer;
-	int rc = 0;
-	int mysock = 0;
-	unsigned char buf[200];
-	int buflen = sizeof(buf);
-	int msgid = 1;
-	MQTTString topicString = MQTTString_initializer;
-	int req_qos = 0;
-	char* payload = "mypayload";
-	int payloadlen = strlen(payload);
-	int len = 0;
-	//char *host = "m2m.eclipse.org";
-	char *host = "127.0.0.1";
-	int port = 1883;
+	NetworkInit(&n);
+	NetworkConnect(&n, opts.host, opts.port);
+	MQTTClientInit(&c, &n, 1000, buf, 100, readbuf, 100);
+ 
+	MQTTPacket_connectData data = MQTTPacket_connectData_initializer;       
+	data.willFlag = 0;
+	data.MQTTVersion = 3;
+	data.clientID.cstring = opts.clientid;
+	data.username.cstring = opts.username;
+	data.password.cstring = opts.password;
 
-	stop_init();
-	if (argc > 1)
-		host = argv[1];
-
-	if (argc > 2)
-		port = atoi(argv[2]);
-
-	mysock = transport_open(host, port);
-	if(mysock < 0)
-		return mysock;
-
-	printf("Sending to hostname %s port %d\n", host, port);
-
-	data.clientID.cstring = "me";
-	data.keepAliveInterval = 20;
+	data.keepAliveInterval = 10;
 	data.cleansession = 1;
-	data.username.cstring = "testuser";
-	data.password.cstring = "testpassword";
+	printf("Connecting to %s %d\n", opts.host, opts.port);
+	
+	rc = MQTTConnect(&c, &data);
+	printf("Connected %d\n", rc);
+    
+    printf("Subscribing to %s\n", topic);
+	rc = MQTTSubscribe(&c, topic, opts.qos, messageArrived);
+	printf("Subscribed %d\n", rc);
 
-	len = MQTTSerialize_connect(buf, buflen, &data);
-	rc = transport_sendPacketBuffer(mysock, buf, len);
-
-	/* wait for connack */
-	if (MQTTPacket_read(buf, buflen, transport_getdata) == CONNACK)
-	{
-		unsigned char sessionPresent, connack_rc;
-
-		if (MQTTDeserialize_connack(&sessionPresent, &connack_rc, buf, buflen) != 1 || connack_rc != 0)
-		{
-			printf("Unable to connect, return code %d\n", connack_rc);
-			goto exit;
-		}
-	}
-	else
-		goto exit;
-
-	/* subscribe */
-	topicString.cstring = "substopic";
-	len = MQTTSerialize_subscribe(buf, buflen, 0, msgid, 1, &topicString, &req_qos);
-
-	rc = transport_sendPacketBuffer(mysock, buf, len);
-	if (MQTTPacket_read(buf, buflen, transport_getdata) == SUBACK) 	/* wait for suback */
-	{
-		unsigned short submsgid;
-		int subcount;
-		int granted_qos;
-
-		rc = MQTTDeserialize_suback(&submsgid, 1, &subcount, &granted_qos, buf, buflen);
-		if (granted_qos != 0)
-		{
-			printf("granted qos != 0, %d\n", granted_qos);
-			goto exit;
-		}
-	}
-	else
-		goto exit;
-
-	/* loop getting msgs on subscribed topic */
-	topicString.cstring = "pubtopic";
 	while (!toStop)
 	{
-		/* transport_getdata() has a built-in 1 second timeout,
-		your mileage will vary */
-		if (MQTTPacket_read(buf, buflen, transport_getdata) == PUBLISH)
-		{
-			unsigned char dup;
-			int qos;
-			unsigned char retained;
-			unsigned short msgid;
-			int payloadlen_in;
-			unsigned char* payload_in;
-			int rc;
-			MQTTString receivedTopic;
-
-			rc = MQTTDeserialize_publish(&dup, &qos, &retained, &msgid, &receivedTopic,
-					&payload_in, &payloadlen_in, buf, buflen);
-			printf("message arrived %.*s\n", payloadlen_in, payload_in);
-		}
-
-		printf("publishing reading\n");
-		len = MQTTSerialize_publish(buf, buflen, 0, 0, 0, 0, topicString, (unsigned char*)payload, payloadlen);
-		rc = transport_sendPacketBuffer(mysock, buf, len);
+		MQTTYield(&c, 1000);	
 	}
+	
+	printf("Stopping\n");
 
-	printf("disconnecting\n");
-	len = MQTTSerialize_disconnect(buf, buflen);
-	rc = transport_sendPacketBuffer(mysock, buf, len);
-
-exit:
-	transport_close(mysock);
+	MQTTDisconnect(&c);
+	NetworkDisconnect(&n);
 
 	return 0;
 }
+
+
