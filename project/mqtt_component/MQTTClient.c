@@ -297,6 +297,7 @@ int cycle(MQTTClient* c, Timer* timer)
                (unsigned char**)&msg.payload, (int*)&msg.payloadlen, c->readbuf, c->readbuf_size) != 1)
                 goto exit;
             msg.qos = (enum QoS)intQoS;
+			/*处理pushlish的内容*/
             deliverMessage(c, &topicName, &msg);
             if (msg.qos != QOS0)
             {

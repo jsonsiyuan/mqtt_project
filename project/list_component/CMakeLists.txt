@@ -1,0 +1,1 @@
+ADD_LIBRARY( list_component STATIC  message_manage.c )

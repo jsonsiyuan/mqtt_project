@@ -53,7 +53,7 @@ int msg_man_add(int index, MQTT_MSG newmsg)
 	{
 
 		pMsgNode = (MSG_Node*)pos;
-		if(pMsgNode.msg.msg_id==newmsg.msg_id&&pMsgNode.msg.msg_type==newmsg.msg_type)
+		if(pMsgNode->msg.msg_id==newmsg.msg_id&&pMsgNode->msg.msg_type==newmsg.msg_type)
 		{
 			msg_man_modify(index,newmsg);
 		}
@@ -67,7 +67,7 @@ int msg_man_add(int index, MQTT_MSG newmsg)
 			Lock_ULock(&_MSGCtx[index].lock);
 			return -1;
 		}
-		memcpy(&pMsgNode->dev,&newmsg,sizeof(newmsg));
+		memcpy(&pMsgNode->msg,&newmsg,sizeof(newmsg));
 		list_add(&pMsgNode->node,&_MSGCtx[index].head);  
 	}
 	Lock_ULock(&_MSGCtx[index].lock);
@@ -86,7 +86,7 @@ int msg_man_modify(int index,MQTT_MSG newmsg)
 	{
 
 		pMsgNode = (MSG_Node*)pos;
-		if(pMsgNode.msg.msg_id==newmsg.msg_id&&pMsgNode.msg.msg_type==newmsg.msg_type)
+		if(pMsgNode->msg.msg_id==newmsg.msg_id&&pMsgNode->msg.msg_type==newmsg.msg_type)
 		{
 			break;
 		}
@@ -118,7 +118,7 @@ int msg_man_get(int index,unsigned short id,unsigned char type,MQTT_MSG *outMSG)
 	list_for_each(pos,&_MSGCtx[index].head)
 	{
 		pMsgNode = (MSG_Node*)pos;
-		if(pMsgNode.msg.msg_id==id&&pMsgNode.msg.msg_type==type)
+		if(pMsgNode->msg.msg_id==id&&pMsgNode->msg.msg_type==type)
 		{
 			break;
 		}
@@ -144,7 +144,7 @@ int msg_man_del(int index,unsigned short id,unsigned char type)
 	{
 		pMsgNode = (MSG_Node*)pos;
 		
-		if(pMsgNode.msg.msg_id==id&&pMsgNode.msg.msg_type==type)
+		if(pMsgNode->msg.msg_id==id&&pMsgNode->msg.msg_type==type)
 		{
 			list_del(pos);
 			delFlag = 1;
