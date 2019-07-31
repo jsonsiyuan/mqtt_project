@@ -19,6 +19,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include "message_manage.h"
 
 static void NewMessageData(MessageData* md, MQTTString* aTopicName, MQTTMessage* aMessage) {
     md->topicName = aTopicName;
@@ -251,6 +252,8 @@ void MQTTCloseSession(MQTTClient* c)
     c->isconnected = 0;
     if (c->cleansession)
         MQTTCleanSession(c);
+	/*reboot 在单片机里是很好的选择*/
+	
 }
 
 
@@ -270,10 +273,20 @@ int cycle(MQTTClient* c, Timer* timer)
         case 0: /* timed out reading packet */
             break;
         case CONNACK:
-        case PUBACK:
         case SUBACK:
         case UNSUBACK:
             break;
+		case PUBACK:
+		{	
+			unsigned short mypacketid;
+			unsigned char dup, type;
+			if (MQTTDeserialize_ack(&type, &dup, &mypacketid, c->readbuf, c->readbuf_size) != 1)
+				rc = FAILURE;
+            if (rc == FAILURE)
+    			goto exit; // there was a problem
+    		/*清除lish内容*/
+			break;
+		}
         case PUBLISH:
         {
             MQTTString topicName;
@@ -288,38 +301,70 @@ int cycle(MQTTClient* c, Timer* timer)
             if (msg.qos != QOS0)
             {
                 if (msg.qos == QOS1)
+                {
                     len = MQTTSerialize_ack(c->buf, c->buf_size, PUBACK, 0, msg.id);
+                }
                 else if (msg.qos == QOS2)
+                {
                     len = MQTTSerialize_ack(c->buf, c->buf_size, PUBREC, 0, msg.id);
+                }
                 if (len <= 0)
                     rc = FAILURE;
                 else
                     rc = sendPacket(c, len, timer);
                 if (rc == FAILURE)
                     goto exit; // there was a problem
+
+				/*添加list内容*/
+				if (msg.qos == QOS1)
+				{
+				
+				}
+				else if (msg.qos == QOS2)
+				{
+				}
             }
             break;
         }
         case PUBREC:
+		/*QOS 2 publish 的回复*/
+		{
+			unsigned short mypacketid;
+			unsigned char dup, type;
+			if (MQTTDeserialize_ack(&type, &dup, &mypacketid, c->readbuf, c->readbuf_size) != 1)
+				rc = FAILURE;
+			else if ((len = MQTTSerialize_ack(c->buf, c->buf_size,PUBREL, 0, mypacketid)) <= 0)
+				rc = FAILURE;
+			else if ((rc = sendPacket(c, len, timer)) != SUCCESS) // send the PUBREL packet
+				rc = FAILURE; // there was a problem
+			if (rc == FAILURE)
+				goto exit; // there was a problem
+			/*删除添加list内容*/
+			break;
+		}
         case PUBREL:
+		/*QOS 2 PUBREC 的回复*/
         {
             unsigned short mypacketid;
             unsigned char dup, type;
             if (MQTTDeserialize_ack(&type, &dup, &mypacketid, c->readbuf, c->readbuf_size) != 1)
                 rc = FAILURE;
-            else if ((len = MQTTSerialize_ack(c->buf, c->buf_size,
-                (packet_type == PUBREC) ? PUBREL : PUBCOMP, 0, mypacketid)) <= 0)
+            else if ((len = MQTTSerialize_ack(c->buf, c->buf_size,PUBCOMP, 0, mypacketid)) <= 0)
                 rc = FAILURE;
             else if ((rc = sendPacket(c, len, timer)) != SUCCESS) // send the PUBREL packet
                 rc = FAILURE; // there was a problem
             if (rc == FAILURE)
                 goto exit; // there was a problem
+            /*删除添加list内容*/
             break;
         }
 
         case PUBCOMP:
+			/*QOS 2 PUBREL 的回复*/
+			/*删除list内容*/
             break;
         case PINGRESP:
+			printf("PINGRESP\r\n");
             c->ping_outstanding = 0;
             break;
     }
@@ -675,6 +720,93 @@ exit:
     return rc;
 }
 
+int MQTTPublish_Asynchronous(MQTTClient* c, const char* topicName, MQTTMessage* message)
+{
+    int rc = FAILURE;
+    Timer timer;
+    MQTTString topic = MQTTString_initializer;
+    topic.cstring = (char *)topicName;
+    int len = 0;
+	MQTT_MSG msg_tmp;
+#if defined(MQTT_TASK)
+	  MutexLock(&c->mutex);
+#endif
+	  if (!c->isconnected)
+		    goto exit;
+
+    TimerInit(&timer);
+    TimerCountdownMS(&timer, c->command_timeout_ms);
+
+    if (message->qos == QOS1 || message->qos == QOS2)
+        message->id = getNextPacketId(c);
+
+    len = MQTTSerialize_publish(c->buf, c->buf_size, 0, message->qos, message->retained, message->id,
+              topic, (unsigned char*)message->payload, message->payloadlen);
+    if (len <= 0)
+        goto exit;
+    if ((rc = sendPacket(c, len, &timer)) != SUCCESS) // send the subscribe packet
+        goto exit; // there was a problem
+    if (message->qos == QOS1 || message->qos == QOS2)
+	{
+		/*add list*/
+		
+		msg_tmp.msg_id=message->id;
+		msg_tmp.msg_type=PUBLISH;
+		msg_tmp.qos=message->qos;
+		msg_tmp.retained=message->retained;
+		memset(msg_tmp.topic,0,sizeof(msg_tmp.topic));
+		strcpy(msg_tmp.topic,topic.cstring);
+		memset(msg_tmp.payload,0,sizeof(msg_tmp.payload));
+		memcpy(msg_tmp.payload,message->payload,message->payloadlen);
+		msg_tmp.payloadlen=message->payloadlen;
+		msg_man_add(0, msg_tmp);
+		
+	}
+exit:
+    if (rc == FAILURE)
+        MQTTCloseSession(c);
+#if defined(MQTT_TASK)
+	  MutexUnlock(&c->mutex);
+#endif
+    return rc;
+}
+
+int MQTTPublish_retry(MQTTClient* c, const char* topicName, MQTTMessage* message)
+{
+    int rc = FAILURE;
+    Timer timer;
+    MQTTString topic = MQTTString_initializer;
+    topic.cstring = (char *)topicName;
+    int len = 0;
+
+#if defined(MQTT_TASK)
+	  MutexLock(&c->mutex);
+#endif
+	  if (!c->isconnected)
+		    goto exit;
+
+    TimerInit(&timer);
+    TimerCountdownMS(&timer, c->command_timeout_ms);
+
+    if (message->qos == QOS1 || message->qos == QOS2)
+        message->id = getNextPacketId(c);
+
+    len = MQTTSerialize_publish(c->buf, c->buf_size, 1, message->qos, message->retained, message->id,
+              topic, (unsigned char*)message->payload, message->payloadlen);
+    if (len <= 0)
+        goto exit;
+    if ((rc = sendPacket(c, len, &timer)) != SUCCESS) // send the subscribe packet
+        goto exit; // there was a problem
+
+
+exit:
+    if (rc == FAILURE)
+        MQTTCloseSession(c);
+#if defined(MQTT_TASK)
+	  MutexUnlock(&c->mutex);
+#endif
+    return rc;
+}
 
 int MQTTDisconnect(MQTTClient* c)
 {
