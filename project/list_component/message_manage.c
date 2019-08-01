@@ -111,7 +111,7 @@ int msg_man_get(int index,unsigned short id,unsigned char type,MQTT_MSG *outMSG)
 	struct list_head *pos;
 	
 	if (index >= num_of_list)return -1;
-	if (NULL == id || NULL == outMSG)return -1;
+	if (NULL == outMSG)return -1;
 	if (!_MSGInited)return -1;
 
 	Lock_Lock(&_MSGCtx[index].lock);
@@ -126,6 +126,67 @@ int msg_man_get(int index,unsigned short id,unsigned char type,MQTT_MSG *outMSG)
 	Lock_ULock(&_MSGCtx[index].lock);
 	if (pos == &_MSGCtx[index].head)return -1;
 	memcpy(outMSG,&pMsgNode->msg,sizeof(pMsgNode->msg));
+
+	return 0;
+}
+
+int msg_man_get_fristone(int index,unsigned char type,MQTT_MSG *outMSG)
+{
+	MSG_Node *pMsgNode = NULL;
+	struct list_head *pos;
+	
+	if (index >= num_of_list)return -1;
+	if (NULL == outMSG)return -1;
+	if (!_MSGInited)return -1;
+
+	Lock_Lock(&_MSGCtx[index].lock);
+	list_for_each(pos,&_MSGCtx[index].head)
+	{
+		pMsgNode = (MSG_Node*)pos;
+		if(pMsgNode->msg.msg_type==type)
+		{
+			break;
+		}
+
+	}
+	Lock_ULock(&_MSGCtx[index].lock);
+	if (pos == &_MSGCtx[index].head)return -1;
+	memcpy(outMSG,&pMsgNode->msg,sizeof(pMsgNode->msg));
+
+	return 0;
+}
+
+struct list_head *head_crcle=&_MSGCtx[0].head;
+int msg_man_get_Yield(int index,MQTT_MSG *outMSG)
+{
+	MSG_Node *pMsgNode = NULL;
+	struct list_head *pos;
+	
+	if (index >= num_of_list)return -1;
+	if (NULL == outMSG)return -1;
+	if (!_MSGInited)return -1;
+
+	Lock_Lock(&_MSGCtx[index].lock);
+	list_for_each(pos,head_crcle)
+	{
+		pMsgNode = (MSG_Node*)pos;
+		{
+			head_crcle=pos;
+			break;
+			
+		}
+
+	}
+	Lock_ULock(&_MSGCtx[index].lock);
+	if (pos == &_MSGCtx[index].head)
+	{
+		head_crcle=pos;
+		return -1;
+	}
+
+	memcpy(outMSG,&pMsgNode->msg,sizeof(pMsgNode->msg));
+	
+	
 
 	return 0;
 }

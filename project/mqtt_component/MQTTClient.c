@@ -19,7 +19,6 @@
 
 #include <stdio.h>
 #include <string.h>
-#include "message_manage.h"
 
 static void NewMessageData(MessageData* md, MQTTString* aTopicName, MQTTMessage* aMessage) {
     md->topicName = aTopicName;
@@ -261,7 +260,8 @@ int cycle(MQTTClient* c, Timer* timer)
 {
     int len = 0,
         rc = SUCCESS;
-
+	MQTT_MSG msg_tmp;
+	Timer timer_tmp;
     int packet_type = readPacket(c, timer);     /* read the socket, see what work is due */
 
     switch (packet_type)
@@ -278,6 +278,7 @@ int cycle(MQTTClient* c, Timer* timer)
             break;
 		case PUBACK:
 		{	
+			printf("##PUBACK\r\n");
 			unsigned short mypacketid;
 			unsigned char dup, type;
 			if (MQTTDeserialize_ack(&type, &dup, &mypacketid, c->readbuf, c->readbuf_size) != 1)
@@ -285,6 +286,7 @@ int cycle(MQTTClient* c, Timer* timer)
             if (rc == FAILURE)
     			goto exit; // there was a problem
     		/*清除lish内容*/
+			msg_man_del(0,mypacketid,PUBLISH);	
 			break;
 		}
         case PUBLISH:
@@ -315,21 +317,13 @@ int cycle(MQTTClient* c, Timer* timer)
                     rc = sendPacket(c, len, timer);
                 if (rc == FAILURE)
                     goto exit; // there was a problem
-
-				/*添加list内容*/
-				if (msg.qos == QOS1)
-				{
-				
-				}
-				else if (msg.qos == QOS2)
-				{
-				}
             }
             break;
         }
         case PUBREC:
 		/*QOS 2 publish 的回复*/
 		{
+			printf("##PUBREC\r\n");
 			unsigned short mypacketid;
 			unsigned char dup, type;
 			if (MQTTDeserialize_ack(&type, &dup, &mypacketid, c->readbuf, c->readbuf_size) != 1)
@@ -340,7 +334,15 @@ int cycle(MQTTClient* c, Timer* timer)
 				rc = FAILURE; // there was a problem
 			if (rc == FAILURE)
 				goto exit; // there was a problem
-			/*删除添加list内容*/
+			/*删除publish   添加 PUBREL 内容*/
+			msg_man_del(0,mypacketid,PUBLISH);
+			
+			TimerInit(&timer_tmp);
+			TimerCountdown(&timer_tmp, 1);
+			msg_tmp.msg_id=mypacketid;
+			msg_tmp.msg_type=PUBREL;
+			msg_tmp.timelast=timer_tmp.end_time.tv_sec;
+			msg_man_add(0,msg_tmp);
 			break;
 		}
         case PUBREL:
@@ -356,16 +358,26 @@ int cycle(MQTTClient* c, Timer* timer)
                 rc = FAILURE; // there was a problem
             if (rc == FAILURE)
                 goto exit; // there was a problem
-            /*删除添加list内容*/
             break;
         }
 
         case PUBCOMP:
-			/*QOS 2 PUBREL 的回复*/
-			/*删除list内容*/
+		/*QOS 2 PUBREL 的回复*/
+		{
+			printf("##PUBCOMP\r\n");
+			unsigned short mypacketid;
+			unsigned char dup, type;
+			if (MQTTDeserialize_ack(&type, &dup, &mypacketid, c->readbuf, c->readbuf_size) != 1)
+				rc = FAILURE;
+			if (rc == FAILURE)
+                goto exit; // there was a problem
+            /*删除 PUBREL list内容*/
+			msg_man_del(0,mypacketid,PUBREL);	
+		}
+
             break;
         case PINGRESP:
-			printf("PINGRESP\r\n");
+			printf("###PINGRESP\r\n");
             c->ping_outstanding = 0;
             break;
     }
@@ -399,8 +411,8 @@ int MQTTYield(MQTTClient* c, int timeout_ms)
             rc = FAILURE;
             break;
         }
+		
   	} while (!TimerIsExpired(&timer));
-
     return rc;
 }
 
@@ -721,7 +733,7 @@ exit:
     return rc;
 }
 
-int MQTTPublish_Asynchronous(MQTTClient* c, const char* topicName, MQTTMessage* message)
+int MQTTPublish_Asyn(MQTTClient* c, const char* topicName, MQTTMessage* message)
 {
     int rc = FAILURE;
     Timer timer;
@@ -729,6 +741,7 @@ int MQTTPublish_Asynchronous(MQTTClient* c, const char* topicName, MQTTMessage* 
     topic.cstring = (char *)topicName;
     int len = 0;
 	MQTT_MSG msg_tmp;
+	Timer timer_tmp;
 #if defined(MQTT_TASK)
 	  MutexLock(&c->mutex);
 #endif
@@ -750,6 +763,8 @@ int MQTTPublish_Asynchronous(MQTTClient* c, const char* topicName, MQTTMessage* 
     if (message->qos == QOS1 || message->qos == QOS2)
 	{
 		/*add list*/
+		TimerInit(&timer_tmp);
+		TimerCountdownMS(&timer_tmp, 1);
 		
 		msg_tmp.msg_id=message->id;
 		msg_tmp.msg_type=PUBLISH;
@@ -760,6 +775,7 @@ int MQTTPublish_Asynchronous(MQTTClient* c, const char* topicName, MQTTMessage* 
 		memset(msg_tmp.payload,0,sizeof(msg_tmp.payload));
 		memcpy(msg_tmp.payload,message->payload,message->payloadlen);
 		msg_tmp.payloadlen=message->payloadlen;
+		msg_tmp.timelast=timer_tmp.end_time.tv_sec;
 		msg_man_add(0, msg_tmp);
 		
 	}
@@ -772,12 +788,12 @@ exit:
     return rc;
 }
 
-int MQTTPublish_retry(MQTTClient* c, const char* topicName, MQTTMessage* message)
+int MQTTPublish_retry(MQTTClient* c, MQTT_MSG message)
 {
     int rc = FAILURE;
     Timer timer;
     MQTTString topic = MQTTString_initializer;
-    topic.cstring = (char *)topicName;
+    topic.cstring = (char *)message.topic;
     int len = 0;
 
 #if defined(MQTT_TASK)
@@ -789,11 +805,9 @@ int MQTTPublish_retry(MQTTClient* c, const char* topicName, MQTTMessage* message
     TimerInit(&timer);
     TimerCountdownMS(&timer, c->command_timeout_ms);
 
-    if (message->qos == QOS1 || message->qos == QOS2)
-        message->id = getNextPacketId(c);
 
-    len = MQTTSerialize_publish(c->buf, c->buf_size, 1, message->qos, message->retained, message->id,
-              topic, (unsigned char*)message->payload, message->payloadlen);
+    len = MQTTSerialize_publish(c->buf, c->buf_size, 1, message.qos, message.retained, message.retained,
+              topic, (unsigned char*)message.payload, message.payloadlen);
     if (len <= 0)
         goto exit;
     if ((rc = sendPacket(c, len, &timer)) != SUCCESS) // send the subscribe packet
@@ -808,6 +822,73 @@ exit:
 #endif
     return rc;
 }
+
+
+
+int MQTTACK_retry(MQTTClient* c, MQTT_MSG message)
+{
+	int rc = FAILURE;
+	Timer timer;
+	int len = 0;
+
+#if defined(MQTT_TASK)
+	  MutexLock(&c->mutex);
+#endif
+	  if (!c->isconnected)
+			goto exit;
+
+	TimerInit(&timer);
+	TimerCountdownMS(&timer, c->command_timeout_ms);
+
+	len = MQTTSerialize_ack(c->buf, c->buf_size, message.msg_type, 0, message.msg_id);
+	if (len <= 0)
+		goto exit;
+	if ((rc = sendPacket(c, len, &timer)) != SUCCESS) // send the subscribe packet
+		goto exit; // there was a problem
+
+
+exit:
+	if (rc == FAILURE)
+		MQTTCloseSession(c);
+#if defined(MQTT_TASK)
+	  MutexUnlock(&c->mutex);
+#endif
+	return rc;
+}
+
+void MQTT_retry_check(MQTTClient* c)
+{
+	Timer timer_tmp;
+    TimerInit(&timer_tmp);
+	int now_time;
+	MQTT_MSG outMSG_tmp;
+	int number_tmp;
+	gettimeofday(&timer_tmp.end_time, NULL);
+	now_time=timer_tmp.end_time.tv_sec;
+	number_tmp=msg_man_get_num(0);
+	printf("list number is [%d]\r\n",number_tmp);
+	/*check publish*/
+	while(0==msg_man_get_Yield(0,&outMSG_tmp))
+	{
+		if(outMSG_tmp.timelast>now_time )
+		{
+			if(outMSG_tmp.msg_type==PUBLISH)
+			{
+				MQTTPublish_retry(c, outMSG_tmp);	
+			}
+			else if(outMSG_tmp.msg_type==PUBREL)
+			{
+				/*check PUBREL*/
+				MQTTACK_retry(c,outMSG_tmp);
+			}
+			break;
+		}
+	}
+	
+		
+
+}
+
 
 int MQTTDisconnect(MQTTClient* c)
 {

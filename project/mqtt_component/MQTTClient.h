@@ -35,6 +35,7 @@
 #endif
 
 #include "MQTTPacket.h"
+#include "message_manage.h"
 
 #if defined(MQTTCLIENT_PLATFORM_HEADER)
 /* The following sequence of macros converts the MQTTCLIENT_PLATFORM_HEADER value
@@ -217,6 +218,22 @@ DLLExport int MQTTYield(MQTTClient* client, int time);
  *  @return truth value indicating whether the client is connected to the server
  */
 DLLExport int MQTTIsConnected(MQTTClient* client);
+/** MQTT MQTTPublish_Asynchronous
+
+ */
+DLLExport int MQTTPublish_Asyn(MQTTClient* c, const char* topicName, MQTTMessage* message);
+/** MQTT MQTTPublish_retry
+
+ */
+DLLExport int MQTTPublish_retry(MQTTClient* c, MQTT_MSG message);
+/** MQTT MQTTACK_retry
+
+ */
+DLLExport int MQTTACK_retry(MQTTClient* c, MQTT_MSG message);
+/** MQTT MQTT_retry_check
+
+ */
+DLLExport void MQTT_retry_check(MQTTClient* c);
 
 #if defined(MQTT_TASK)
 /** MQTT start background thread for a client.  After this, MQTTYield should not be called.

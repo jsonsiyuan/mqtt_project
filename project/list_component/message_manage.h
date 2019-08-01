@@ -12,12 +12,15 @@ typedef struct{
 	unsigned char topic[TOPIC_MSG_LENGTH];
 	unsigned char payload[MQTT_MSG_LENGTH];
     int payloadlen;
+	int timelast;
 }MQTT_MSG;
 
 
 int msg_man_add(int index, MQTT_MSG newmsg);
 int msg_man_modify(int index,MQTT_MSG newmsg);
 int msg_man_get(int index,unsigned short id,unsigned char type,MQTT_MSG *outMSG);
+int msg_man_get_fristone(int index,unsigned char type,MQTT_MSG *outMSG);
+int msg_man_get_Yield(int index,MQTT_MSG *outMSG);
 int msg_man_del(int index,unsigned short id,unsigned char type);
 int msg_man_get_num(int index);
 int msg_man_init(void);

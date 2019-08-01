@@ -44,6 +44,7 @@
 #include <stdio.h>
 #include <memory.h>
 #include "MQTTClient.h"
+#include "message_manage.h"
 
 #include <stdio.h>
 #include <signal.h>
@@ -237,10 +238,21 @@ int main(int argc, char** argv)
     printf("Subscribing to %s\n", topic);
 	rc = MQTTSubscribe(&c, topic, opts.qos, messageArrived);
 	printf("Subscribed %d\n", rc);
-
+	msg_man_init();
+	unsigned char buf_tmp[10]="jj_test";
 	while (!toStop)
 	{
-		MQTTYield(&c, 1000);	
+		MQTTYield(&c, 1000);
+		//MQTT_retry_check(&c);
+		MQTTMessage message;
+		message.qos=2;
+		message.retained=1;
+        message.payload=buf_tmp;
+        message.payloadlen=7;
+		
+		MQTTPublish_Asyn(&c, topic,&message);
+		MQTT_retry_check(&c);
+		
 	}
 	
 	printf("Stopping\n");
